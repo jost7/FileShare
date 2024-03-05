@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple P2P File Transfer</title>
+</head>
+<body>
+    <h2>Sender</h2>
+    <input type="file" id="fileInput">
+    <button id="createOffer">Create Offer</button>
+    <textarea id="offer"></textarea>
+    <input type="text" id="answerInput">
+    <button id="startConnection">Start Connection</button>
+
+    <h2>Receiver</h2>
+    <textarea id="receivedOffer"></textarea>
+    <button id="createAnswer">Create Answer</button>
+    <textarea id="answer"></textarea>
+
+    <script>
+// Elements
+const fileInput = document.getElementById('fileInput');
+const createOfferButton = document.getElementById('createOffer');
+const offerTextarea = document.getElementById('offer');
+const answerInput = document.getElementById('answerInput');
+const startConnectionButton = document.getElementById('startConnection');
+const receivedOfferTextarea = document.getElementById('receivedOffer');
+const createAnswerButton = document.getElementById('createAnswer');
+const answerTextarea = document.getElementById('answer');
+
+// Create peer connection with STUN server configuration
+let peerConnection = new RTCPeerConnection({
+    iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
+});
+
+let dataChannel;
+const receivedBuffers = [];
+
+createOfferButton.onclick = async () => {
+    dataChannel = peerConnection.createDataChannel('fileTransfer');
+    dataChannel.binaryType = 'arraybuffer';
+    dataChannel.onopen = () => console.log('Data channel open');
+    dataChannel.onmessage = event => console.log('Received message:', event.data);
+
+    const offer = await peerConnection.createOffer();
+    await peerConnection.setLocalDescription(offer);
+    offerTextarea.value = JSON.stringify(offer);
+};
+
+startConnectionButton.onclick = async () => {
+    const answer = JSON.parse(answerInput.value);
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+};
+
+createAnswerButton.onclick = async () => {
+    const offer = JSON.parse(receivedOfferTextarea.value);
+    await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await peerConnection.createAnswer();
+    await peerConnection.setLocalDescription(answer);
+    answerTextarea.value = JSON.stringify(answer);
+};
+
+peerConnection.ondatachannel = event => {
+    const receiveChannel = event.channel;
+    receiveChannel.binaryType = 'arraybuffer';
+    receiveChannel.onmessage = event => {
+        receivedBuffers.push(event.data);
+        if (event.data.byteLength === 0) { // Using an empty Uint8Array as a signal for end of file
+            const receivedBlob = new Blob(receivedBuffers);
+            downloadReceivedFile(receivedBlob);
+            receivedBuffers.length = 0; // Clear the buffer array
+        }
+    };
+};
+
+function downloadReceivedFile(blob) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.style.display = 'none';
+    a.href = url;
+    a.download = 'received_file'; // You can give it a default name or pass the file name via dataChannel
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+}
+
+fileInput.onchange = async () => {
+    const file = fileInput.files[0];
+    if (file && dataChannel.readyState === 'open') {
+        const chunkSize = 16384; // 16 KB
+        const fileReader = new FileReader();
+        let offset = 0;
+
+        fileReader.onload = () => {
+            dataChannel.send(fileReader.result);
+            offset += fileReader.result.byteLength;
+            if (offset < file.size) {
+                readSlice(offset);
+            } else {
+                dataChannel.send(new Uint8Array()); // Signal for end of file
+            }
+        };
+
+        const readSlice = o => {
+            const slice = file.slice(offset, o + chunkSize);
+            fileReader.readAsArrayBuffer(slice);
+        };
+
+        readSlice(0);
+    }
+};
+
+	</script>
+</body>
+</html>
